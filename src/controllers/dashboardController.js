@@ -8,6 +8,7 @@ const TIMEZONE = 'Asia/Kolkata';
 exports.summary = asyncHandler(async (req, res) => {
   const [statusCounts, teams, registrationsByDay, styleCounts] = await Promise.all([
     Player.aggregate([
+      { $match: Player.ACTIVE },
       {
         $group: {
           _id: null,
@@ -20,6 +21,7 @@ exports.summary = asyncHandler(async (req, res) => {
     ]),
     Team.find().sort({ name: 1 }).lean(),
     Player.aggregate([
+      { $match: Player.ACTIVE },
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m-%d', date: '$registrationDate', timezone: TIMEZONE } },
@@ -29,7 +31,7 @@ exports.summary = asyncHandler(async (req, res) => {
       { $sort: { _id: 1 } },
     ]),
     Player.aggregate([
-      { $match: { paymentStatus: 'Paid' } },
+      { $match: { paymentStatus: 'Paid', ...Player.ACTIVE } },
       {
         $group: {
           _id: '$cricketStyle',

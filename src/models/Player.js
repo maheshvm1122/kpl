@@ -19,14 +19,23 @@ const playerSchema = new mongoose.Schema(
     soldAmount: { type: Number, default: null },
     team: { type: mongoose.Schema.Types.ObjectId, ref: 'Team', default: null },
     soldAt: { type: Date, default: null },
+
+    // Archived players are hidden from every list, count and the auction (soft delete).
+    status: { type: String, enum: ['Active', 'Archived'], default: 'Active' },
+    archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    archivedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
 
+playerSchema.index({ status: 1 });
 playerSchema.index({ paymentStatus: 1 });
 playerSchema.index({ soldStatus: 1 });
 playerSchema.index({ team: 1 });
 playerSchema.index({ slSeq: 1 });
 playerSchema.index({ registrationDate: -1 });
+
+/** Matches players that are not archived (older records have no status field). */
+playerSchema.statics.ACTIVE = { status: { $ne: 'Archived' } };
 
 module.exports = mongoose.model('Player', playerSchema);

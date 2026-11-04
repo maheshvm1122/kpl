@@ -45,6 +45,10 @@ function buildFilter(query, user) {
   }
 
   if (user.role === 'Auctioneer') filter.paymentStatus = 'Paid';
+
+  // Archived players only appear on the Archived Players screen (Admin).
+  if (query.archived === 'true' && user.role === 'Admin') filter.status = 'Archived';
+  else filter.status = { $ne: 'Archived' };
   return filter;
 }
 
@@ -59,7 +63,13 @@ exports.list = asyncHandler(async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
 
   const [items, total] = await Promise.all([
-    Player.find(filter).sort(buildSort(req.query)).skip(skip).limit(limit).populate('team', TEAM_FIELDS).lean(),
+    Player.find(filter)
+      .sort(buildSort(req.query))
+      .skip(skip)
+      .limit(limit)
+      .populate('team', TEAM_FIELDS)
+      .populate('archivedBy', 'name username')
+      .lean(),
     Player.countDocuments(filter),
   ]);
 
@@ -83,7 +93,7 @@ async function loadPlayerDetail(id, user) {
     .populate('paymentUpdatedBy', 'name username')
     .lean();
   if (!player) throw new AppError('Player not found', 404);
-  if (user.role === 'Auctioneer' && player.paymentStatus !== 'Paid') {
+  if (user.role === 'Auctioneer' && (player.paymentStatus !== 'Paid' || player.status === 'Archived')) {
     throw new AppError('Only paid players are available to the auctioneer', 403);
   }
 
@@ -160,11 +170,14 @@ exports.updatePayment = asyncHandler(async (req, res) => {
   const update = { paymentStatus: status, paymentUpdatedBy: req.user._id, paymentUpdatedAt: new Date() };
   // Guarded so a player cannot be marked Unpaid while (or after) being sold.
   const guard = status === 'Unpaid' ? { soldStatus: 'NotSold' } : {};
-  const player = await Player.findOneAndUpdate({ _id: req.params.id, ...guard }, update, { new: true });
+  const player = await Player.findOneAndUpdate({ _id: req.params.id, ...Player.ACTIVE, ...guard }, update, {
+    new: true,
+  });
 
   if (!player) {
-    const exists = await Player.findById(req.params.id).select('soldStatus slNo').lean();
+    const exists = await Player.findById(req.params.id).select('soldStatus slNo status').lean();
     if (!exists) throw new AppError('Player not found', 404);
+    if (exists.status === 'Archived') throw new AppError(`${exists.slNo} is archived. Restore the player first`, 409);
     throw new AppError(
       `${exists.slNo} is already sold. The auctioneer must undo the sale before marking this player Unpaid`,
       409
@@ -191,7 +204,7 @@ exports.bulkUpdatePayment = asyncHandler(async (req, res) => {
   if (!PAYMENT_STATUS.includes(status)) throw new AppError('Status must be Paid or Unpaid', 400);
   ids.forEach((id) => assertObjectId(id, 'player id'));
 
-  const filter = { _id: { $in: ids }, paymentStatus: { $ne: status } };
+  const filter = { _id: { $in: ids }, paymentStatus: { $ne: status }, ...Player.ACTIVE };
   if (status === 'Unpaid') filter.soldStatus = 'NotSold';
 
   const targets = await Player.find(filter).select('slNo fullName').lean();
@@ -215,4 +228,50 @@ exports.bulkUpdatePayment = asyncHandler(async (req, res) => {
     message: `${updated} player(s) marked ${status}${skipped ? `, ${skipped} skipped` : ''}`,
     data: { updated, skipped },
   });
+});
+
+/** PATCH /api/players/:id/archive - Admin. "Delete" from All Players; the player can be restored. */
+exports.archive = asyncHandler(async (req, res) => {
+  assertObjectId(req.params.id, 'player id');
+  const player = await Player.findOneAndUpdate(
+    { _id: req.params.id, soldStatus: 'NotSold', ...Player.ACTIVE },
+    { status: 'Archived', archivedBy: req.user._id, archivedAt: new Date() },
+    { new: true }
+  );
+  if (!player) {
+    const exists = await Player.findById(req.params.id).select('slNo soldStatus status').lean();
+    if (!exists) throw new AppError('Player not found', 404);
+    if (exists.status === 'Archived') throw new AppError(`${exists.slNo} is already archived`, 409);
+    throw new AppError(`${exists.slNo} is sold. The auctioneer must undo the sale before this player can be deleted`, 409);
+  }
+
+  audit(req, {
+    category: 'player',
+    action: 'player.archived',
+    message: `${req.user.name} deleted (archived) ${playerLabel(player)}`,
+    target: { type: 'Player', id: String(player._id), label: playerLabel(player) },
+  });
+  res.json({ success: true, message: `${player.slNo} moved to Archived Players`, data: { _id: player._id } });
+});
+
+/** PATCH /api/players/:id/unarchive - Admin. Brings an archived player back to the lists. */
+exports.unarchive = asyncHandler(async (req, res) => {
+  assertObjectId(req.params.id, 'player id');
+  const player = await Player.findOneAndUpdate(
+    { _id: req.params.id, status: 'Archived' },
+    { status: 'Active', archivedBy: null, archivedAt: null },
+    { new: true }
+  );
+  if (!player) {
+    const exists = await Player.exists({ _id: req.params.id });
+    throw new AppError(exists ? 'This player is not archived' : 'Player not found', exists ? 409 : 404);
+  }
+
+  audit(req, {
+    category: 'player',
+    action: 'player.unarchived',
+    message: `${req.user.name} restored ${playerLabel(player)} from Archived Players`,
+    target: { type: 'Player', id: String(player._id), label: playerLabel(player) },
+  });
+  res.json({ success: true, message: `${player.slNo} restored`, data: { _id: player._id } });
 });

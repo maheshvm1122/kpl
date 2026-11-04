@@ -84,7 +84,12 @@ exports.register = asyncHandler(async (req, res) => {
     throw new AppError(Object.values(errors)[0], 400, errors);
   }
 
-  const existing = await Player.findOne({ mobile }).select('slNo').lean();
+  const existing = await Player.findOne({ mobile }).select('slNo status').lean();
+  if (existing?.status === 'Archived') {
+    throw new AppError('This mobile number was registered before. Please contact the admin', 409, {
+      mobile: 'This mobile number was registered before. Please contact the admin',
+    });
+  }
   if (existing) {
     throw new AppError(`This mobile number is already registered (S.L. No ${existing.slNo})`, 409, {
       mobile: 'This mobile number is already registered',

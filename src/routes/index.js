@@ -47,6 +47,8 @@ router.patch('/players/payment/bulk', ...adminOnly, players.bulkUpdatePayment);
 router.get('/players/:id', ...staff, players.getOne);
 router.put('/players/:id', ...adminOnly, upload.single('photo'), players.update);
 router.patch('/players/:id/payment', ...adminOnly, players.updatePayment);
+router.patch('/players/:id/archive', ...adminOnly, players.archive);
+router.patch('/players/:id/unarchive', ...adminOnly, players.unarchive);
 
 // Teams
 router.get('/teams', ...staff, teams.list);

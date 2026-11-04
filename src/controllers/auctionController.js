@@ -61,8 +61,9 @@ exports.sell = asyncHandler(async (req, res) => {
   assertObjectId(playerId, 'player');
   const amount = toPositiveAmount(req.body.amount, 'Sold amount');
 
-  const existing = await Player.findById(playerId).select('slNo fullName paymentStatus soldStatus').lean();
+  const existing = await Player.findById(playerId).select('slNo fullName paymentStatus soldStatus status').lean();
   if (!existing) throw new AppError('Player not found', 404);
+  if (existing.status === 'Archived') throw new AppError(`${existing.slNo} is archived and cannot be sold`, 400);
   if (existing.paymentStatus !== 'Paid') throw new AppError(`${existing.slNo} has not paid and cannot be sold`, 400);
   if (existing.soldStatus === 'Sold') throw new AppError(`${existing.slNo} is already sold`, 409);
   await loadTeamOrFail(teamId);
@@ -72,7 +73,7 @@ exports.sell = asyncHandler(async (req, res) => {
 
     // Conditional update: only one request can move this player from NotSold to Sold.
     const player = await Player.findOneAndUpdate(
-      { _id: playerId, paymentStatus: 'Paid', soldStatus: 'NotSold' },
+      { _id: playerId, paymentStatus: 'Paid', soldStatus: 'NotSold', ...Player.ACTIVE },
       { soldStatus: 'Sold', team: teamId, soldAmount: amount, soldAt },
       withSession(session)
     );
